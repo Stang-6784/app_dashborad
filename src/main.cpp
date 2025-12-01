@@ -1,81 +1,68 @@
 #include <Arduino.h>
-#include <Adafruit_BME280.h>
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
 
-#define SDA_PIN 21
-#define SCL_PIN 22
+// I2C address for BME280 (0x76 or 0x77)
+#define BME_ADDRESS 0x76
 
-// 1. สร้าง Object สำหรับเซนเซอร์แต่ละตัว
-Adafruit_BME280 bmeA; // สำหรับ Sensor A
-Adafruit_BME280 bmeB; // สำหรับ Sensor B
+Adafruit_BME280 bme; 
+
+// กำหนด Baud Rate เป็น 9600 เพื่อให้ตรงกับ Flask Server
+#define BAUD_RATE 9600 
 
 void setup() {
-  Serial.begin(115200);
-  delay(2000);
+    Wire.begin();
+    Serial.begin(BAUD_RATE);
+    Serial.println("Initialzing BME280...");
 
-  Serial.println("--- BME280 Dual Sensor Setup ---");
-
-  // เริ่มต้น I2C Bus บน ESP32
-  Wire.begin(SDA_PIN, SCL_PIN); 
-
-  // 2. เริ่มต้น Sensor A ด้วย Address 0x76
-  if (!bmeA.begin(0x76, &Wire)) {
-    Serial.println("❌ ไม่พบ BME280 Sensor A ที่ 0x76");
-    // คุณอาจเปลี่ยนไปลอง 0x77 ก็ได้ แต่เราสมมติว่ามีการแยกแอดเดรสไว้แล้ว
-  } else {
-    Serial.println("✅ BME280 Sensor A (0x76) พร้อมใช้งาน");
-  }
-
-  // 3. เริ่มต้น Sensor B ด้วย Address 0x77
-  if (!bmeB.begin(0x77, &Wire)) {
-    Serial.println("❌ ไม่พบ BME280 Sensor B ที่ 0x77");
-  } else {
-    Serial.println("✅ BME280 Sensor B (0x77) พร้อมใช้งาน");
-  }
-
-  Serial.println("--------------------------------");
+    // ตรวจสอบการเชื่อมต่อ BME280
+    while (!bme.begin(BME_ADDRESS)) {
+        Serial.print(".");
+        delay(500);
+    }
+    Serial.println("\nBME280 initialization successful!");
+    // กำหนดค่า Sampling (optional)
+    bme.setSampling(Adafruit_BME280::MODE_FORCED,
+                    Adafruit_BME280::SAMPLING_X1,
+                    Adafruit_BME280::SAMPLING_X1,
+                    Adafruit_BME280::SAMPLING_X1,
+                    Adafruit_BME280::FILTER_OFF);
 }
+
+// ฟังก์ชันนี้ถูกลบออก เพราะเราจะอ่านและส่งค่าทั้งหมดใน loop()
+/* float tempRead() { ... } */
 
 void loop() {
-  // อ่านและแสดงค่าจาก Sensor A (0x76)
-  Serial.println("--- Sensor A (Outside) ---");
-  Serial.print("Temp A: ");
-  Serial.print(bmeA.readTemperature());
-  Serial.println(" °C");
+    // อ่านค่า BME280
+    bme.takeForcedMeasurement(); // สั่งให้เซนเซอร์อ่านค่า
 
-  Serial.print("Humidity A: ");
-  Serial.print(bmeA.readHumidity());
-  Serial.println(" %");
+    float temperature = bme.readTemperature(); // อุณหภูมิ (°C)
+    float humidity = bme.readHumidity();       // ความชื้น (%)
+    float pressure = bme.readPressure() / 100.0F; // ความกดอากาศ (hPa)
 
-  Serial.print("Pressure A: ");
-  Serial.print(bmeA.readPressure() / 100.0F); // แปลง Pa เป็น hPa
-  Serial.println(" hPa");
+    // ตรวจสอบว่าค่าที่อ่านได้มีความสมเหตุสมผลหรือไม่ (ป้องกันค่าที่ไม่ถูกต้องตอนเริ่มต้น)
+    if (isnan(temperature) || isnan(humidity) || isnan(pressure)) {
+        Serial.println("Error reading sensor!");
+    } else {
+        // *** รูปแบบการส่งข้อมูลสำคัญมาก: CSV (Comma-Separated Values) ***
+        // ส่ง: อุณหภูมิ,ความชื้น,ความกดอากาศ (แทน humidity,dust ในโค้ด Python เดิม)
+        // ใช้ 2 ตำแหน่งทศนิยมเพื่อความแม่นยำและง่ายต่อการ Parse
+        Serial.print(String(temperature, 2));
+        Serial.print(",");
+        Serial.print(String(humidity, 2));
+        Serial.print(",");
+        Serial.println(String(pressure, 2));
 
-  // อ่านและแสดงค่าจาก Sensor B (0x77)
-  Serial.println("--- Sensor B (Inside) ---");
-  Serial.print("Temp B: ");
-  Serial.print(bmeB.readTemperature());
-  Serial.println(" °C");
+        // Note: สามารถเปิดบรรทัดนี้เพื่อดูการส่งค่าใน Serial Monitor
+        // Serial.print("Sent: ");
+        // Serial.print(String(temperature, 2)); Serial.print(",");
+        // Serial.print(String(humidity, 2)); Serial.print(",");
+        // Serial.println(String(pressure, 2));
+    }
 
-  Serial.print("Humidity B: ");
-  Serial.print(bmeB.readHumidity());
-  Serial.println(" %");
-
-  Serial.print("Pressure B: ");
-  Serial.print(bmeB.readPressure() / 100.0F);
-  Serial.println(" hPa");
-
-  Serial.println("--------------------------------");
-  delay(5000); // หน่วงเวลา 5 วินาที
+    // ส่งข้อมูลทุกๆ 2 วินาที
+    // delay(2000);
 }
-// #define BME280PinScl 22
-// #define BME280PinSda 21
-// Adafruit_BME280 bme; 
-
-// int sensorValueSDA;
-// int sensorValueSCL;
-
 // void setup() {
 //   Serial.begin(9600);
 //   Serial.println("BME280 test");
