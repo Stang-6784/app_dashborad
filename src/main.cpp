@@ -1,96 +1,151 @@
 #include <Arduino.h>
+#include <SPI.h>
+#include <LoRa.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
 #include <Wire.h>
-#include <Adafruit_BME280.h>
+#include <RTClib.h>
 
-// I2C address for BME280 (0x76 or 0x77)
-#define BME_ADDRESS 0x76
+// ========== LoRa pin definition ===========
+#define LoRa_SCK 18
+#define LoRa_MISO 19
+#define LoRa_MOSI 23
+#define LoRa_SS 5
+#define LoRa_RST 4
+#define LoRa_DIO0 26
 
-Adafruit_BME280 bme; 
+// ============== LoRa Config =================
+const long LoRa_FREQ = 433E6;
+const uint8_t SYNC_WORD = 0x12;
 
-// กำหนด Baud Rate เป็น 9600 เพื่อให้ตรงกับ Flask Server
-#define BAUD_RATE 9600 
+// ================ ID ==================
+const char* GROUP_ID = "G9";
+char deviceId = 'R';
+
+// ================ WiFi =================
+const char* ssid = "EMB5326";
+const char* password = "cdti12345";
+
+// ================ Firebase =================
+const char* FIREBASE_HOST =
+"https://weather-app-a8630-default-rtdb.asia-southeast1.firebasedatabase.app";
+
+// ================ RTC =================
+RTC_DS3231 rtc;
+
+// --------- Get Unix Timestamp ----------
+unsigned long getTimestamp() {
+  DateTime now = rtc.now();
+  return now.unixtime();
+}
+
+// --------- Send to Firebase ----------
+void sendToFirebase(float t, float h, float p, float d, float b) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  DateTime now = rtc.now();
+
+  // Unix timestamp (ใช้เป็น key)
+  unsigned long ts = now.unixtime();
+
+  // String วันที่เวลา (อ่านง่าย)
+  char dt[20];
+  sprintf(dt, "%04d-%02d-%02d %02d:%02d:%02d",
+        now.year(), now.month(), now.day(),
+        now.hour(), now.minute(), now.second());
+
+  String url =
+  String(FIREBASE_HOST) +
+  "/air_quality/G9/N1/" +
+  String(ts) +
+  ".json";
+
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+
+  String json = "{";
+  json += "\"ts\":" + String(ts) + ",";
+  json += "\"datetime\":\"" + String(dt) + "\",";
+  json += "\"temp\":" + String(t,1) + ",";
+  json += "\"humi\":" + String(h,1) + ",";
+  json += "\"pres\":" + String(p,1) + ",";
+  json += "\"dust\":" + String(d,1) + ",";
+  json += "\"batt\":" + String(b,2);
+  json += "}";
+  
+
+  int code = http.PUT(json);
+  Serial.print("Firebase HTTP code = ");
+  Serial.println(code);
+
+if (code > 0) {
+  String payload = http.getString();
+  Serial.println(payload);
+}
+
+  http.end();
+}
 
 void setup() {
-    Wire.begin();
-    Serial.begin(BAUD_RATE);
-    Serial.println("Initialzing BME280...");
+  Serial.begin(115200);
+  delay(1000);
 
-    // ตรวจสอบการเชื่อมต่อ BME280
-    while (!bme.begin(BME_ADDRESS)) {
-        Serial.print(".");
-        delay(500);
-    }
-    Serial.println("\nBME280 initialization successful!");
-    // กำหนดค่า Sampling (optional)
-    bme.setSampling(Adafruit_BME280::MODE_FORCED,
-                    Adafruit_BME280::SAMPLING_X1,
-                    Adafruit_BME280::SAMPLING_X1,
-                    Adafruit_BME280::SAMPLING_X1,
-                    Adafruit_BME280::FILTER_OFF);
+  // ===== RTC setup =====
+  Wire.begin();
+  if (!rtc.begin()) {
+    Serial.println("RTC not found");
+    while (1);
+  }
+  if (rtc.lostPower()) {
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+
+  // ===== LoRa setup =====
+  SPI.begin(LoRa_SCK, LoRa_MISO, LoRa_MOSI, LoRa_SS);
+  LoRa.setSPI(SPI);
+  LoRa.setPins(LoRa_SS, LoRa_RST, LoRa_DIO0);
+
+  if (!LoRa.begin(LoRa_FREQ)) {
+    Serial.println("LoRa init failed!");
+    while (1);
+  }
+
+  LoRa.setSpreadingFactor(7);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  LoRa.enableCrc();
+  LoRa.setSyncWord(SYNC_WORD);
+
+  Serial.println("LoRa RX Ready");
+
+  // ===== WiFi =====
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected");
 }
-
-// ฟังก์ชันนี้ถูกลบออก เพราะเราจะอ่านและส่งค่าทั้งหมดใน loop()
-/* float tempRead() { ... } */
 
 void loop() {
-    // อ่านค่า BME280
-    bme.takeForcedMeasurement(); // สั่งให้เซนเซอร์อ่านค่า
 
-    float temperature = bme.readTemperature(); // อุณหภูมิ (°C)
-    float humidity = bme.readHumidity();       // ความชื้น (%)
-    float pressure = bme.readPressure() / 100.0F; // ความกดอากาศ (hPa)
+  // รับข้อมูล LoRa 
+  int packetSize = LoRa.parsePacket();
+  if (!packetSize) return;
 
-    // ตรวจสอบว่าค่าที่อ่านได้มีความสมเหตุสมผลหรือไม่ (ป้องกันค่าที่ไม่ถูกต้องตอนเริ่มต้น)
-    if (isnan(temperature) || isnan(humidity) || isnan(pressure)) {
-        Serial.println("Error reading sensor!");
-    } else {
-        // *** รูปแบบการส่งข้อมูลสำคัญมาก: CSV (Comma-Separated Values) ***
-        // ส่ง: อุณหภูมิ,ความชื้น,ความกดอากาศ (แทน humidity,dust ในโค้ด Python เดิม)
-        // ใช้ 2 ตำแหน่งทศนิยมเพื่อความแม่นยำและง่ายต่อการ Parse
-        Serial.print(String(temperature, 2));
-        Serial.print(",");
-        Serial.print(String(humidity, 2));
-        Serial.print(",");
-        Serial.println(String(pressure, 2));
+  String msg = LoRa.readString();
+  msg.trim();
 
-        // Note: สามารถเปิดบรรทัดนี้เพื่อดูการส่งค่าใน Serial Monitor
-        // Serial.print("Sent: ");
-        // Serial.print(String(temperature, 2)); Serial.print(",");
-        // Serial.print(String(humidity, 2)); Serial.print(",");
-        // Serial.println(String(pressure, 2));
-    }
+  if (!msg.startsWith("G9")) return;
 
-    // ส่งข้อมูลทุกๆ 2 วินาที
-    // delay(2000);
+  Serial.println("RECV = " + msg);
+
+  // ส่งขึ้น Firebase
+  float t,h,p,d,b;
+  if (sscanf(msg.c_str(),
+      "G9,T=%f,H=%f,P=%f,D=%f,B=%f",
+      &t,&h,&p,&d,&b) == 5) {
+
+    sendToFirebase(t,h,p,d,b);
+  }
 }
-// void setup() {
-//   Serial.begin(9600);
-//   Serial.println("BME280 test");
-//   Wire.begin(BME280PinSda, BME280PinScl);
-//   if (!bme.begin(0x76)) {
-//     Serial.println("ลอง address 0x77");
-//     if (!bme.begin(0x77)) {
-//       Serial.println("ไม่พบ BME280 ตรวจสอบสาย/ไฟ");
-//       while (1);
-//     }
-//     Serial.println("BME280 พร้อมใช้งาน!");
-//   }
-// }
-
-// void loop() {
-//   float temp = bme.readTemperature();
-//   float humidity = bme.readHumidity();
-//   // แปลงความดันเป็น hPa
-//   float pressure = bme.readPressure() / 100.0F;
-
-//   // *** รูปแบบ CSV: Temp,Humidity,Pressure ***
-//   // โค้ด Python จะอ่านและแยกค่าเหล่านี้ด้วยเครื่องหมาย comma (,)
-//   Serial.print(temp);
-//   Serial.print(",");
-//   Serial.print(humidity);
-//   Serial.print(",");
-  
-//   // ใช้ Serial.println() เพื่อขึ้นบรรทัดใหม่ ทำให้ Python อ่านเป็น 1 ชุดข้อมูลได้ง่าย
-//   Serial.println(pressure);
-//   delay(2000);
-// }
