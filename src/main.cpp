@@ -33,6 +33,10 @@ const char* FIREBASE_HOST =
 // ================ RTC =================
 RTC_DS3231 rtc;
 
+// ================ Delete Data =================
+const unsigned long ONE_WEEK = 7UL * 24UL * 60UL * 60UL;
+unsigned long lastDeleteTs = 0;
+
 // --------- Get Unix Timestamp ----------
 unsigned long getTimestamp() {
   DateTime now = rtc.now();
@@ -82,6 +86,41 @@ if (code > 0) {
   String payload = http.getString();
   Serial.println(payload);
 }
+
+  http.end();
+}
+
+// ================== Delete Old Data ===================
+void deleteOldData() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  unsigned long nowTs = rtc.now().unixtime();
+  unsigned long cutoffTs = nowTs - ONE_WEEK;
+
+  String url = String(FIREBASE_HOST) +
+    "/air_quality/" + GROUP_ID + "/" + deviceId + ".json"
+    "?orderBy=\"ts\"&endAt=" + String(cutoffTs);
+
+  HTTPClient http;
+  http.begin(url);
+
+  int code = http.GET();
+  if (code == 200) {
+    String payload = http.getString();
+
+    if (payload != "null") {
+      HTTPClient del;
+      String delUrl = String(FIREBASE_HOST) +
+        "/air_quality/" + GROUP_ID + "/" + deviceId + ".json"
+        "?orderBy=\"ts\"&endAt=" + String(cutoffTs);
+
+      del.begin(delUrl);
+      del.sendRequest("DELETE");
+      del.end();
+
+      Serial.println("Old data deleted (older than 1 week)");
+    }
+  }
 
   http.end();
 }
