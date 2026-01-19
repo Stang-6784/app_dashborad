@@ -11,7 +11,7 @@
 #define LoRa_MISO 19
 #define LoRa_MOSI 23
 #define LoRa_SS 5
-#define LoRa_RST 4
+#define LoRa_RST 13
 #define LoRa_DIO0 26
 
 // ============== LoRa Config =================
@@ -23,8 +23,8 @@ const char* GROUP_ID = "G9";
 char deviceId = 'R';
 
 // ================ WiFi =================
-const char* ssid = "EMB5326";
-const char* password = "cdti12345";
+const char* ssid = "Xiaomi 14T Pro";
+const char* password = "stangpat1234";
 
 // ================ Firebase =================
 const char* FIREBASE_HOST =
